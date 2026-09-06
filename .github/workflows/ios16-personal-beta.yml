@@ -41,8 +41,11 @@ jobs:
       - name: Build unsigned iOS 16.5 app
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
           rm -rf "$RUNNER_TEMP/mimi-derived" "$RUNNER_TEMP/mimi-ipa"
+          rm -f "$GITHUB_WORKSPACE/xcodebuild.log" "$GITHUB_WORKSPACE/compat-errors.txt"
+
+          set +e
           xcodebuild \
             -project ios/MimiRemote/MimiRemote.xcodeproj \
             -scheme MimiRemote \
@@ -54,7 +57,19 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY='' \
-            build
+            build 2>&1 | tee "$GITHUB_WORKSPACE/xcodebuild.log"
+          build_status=${PIPESTATUS[0]}
+          set -e
+
+          grep -E '(^|: )(error:|fatal error:)|is only available in iOS|introduced in iOS|requires iOS|IPHONEOS_DEPLOYMENT_TARGET|The iOS deployment target' \
+            "$GITHUB_WORKSPACE/xcodebuild.log" \
+            | tail -n 300 > "$GITHUB_WORKSPACE/compat-errors.txt" || true
+
+          if [[ $build_status -ne 0 ]]; then
+            echo "===== iOS 16.5 compiler diagnostics ====="
+            cat "$GITHUB_WORKSPACE/compat-errors.txt"
+            exit "$build_status"
+          fi
 
           app_path="$(find "$RUNNER_TEMP/mimi-derived/Build/Products" -type d -path '*Release-iphoneos/MimiRemote.app' -print -quit)"
           [[ -n "$app_path" && -d "$app_path" ]] || {
@@ -72,6 +87,15 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$app_path/Info.plist"
           shasum -a 256 "$GITHUB_WORKSPACE/MimiRemote-iOS16.5-Personal-Beta.ipa" \
             | tee "$GITHUB_WORKSPACE/MimiRemote-iOS16.5-Personal-Beta.ipa.sha256"
+
+      - name: Upload compatibility diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: iOS16.5-compiler-diagnostics
+          path: compat-errors.txt
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
