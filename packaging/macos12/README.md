@@ -9,6 +9,17 @@ This package is a personal compatibility host for macOS Monterey. It keeps the u
 - For the macOS shared App Server transport, Remote Login enabled and `ssh 127.0.0.1 true` working without an interactive password prompt.
 - iPhone/iPad and Mac on the same trusted LAN, or another private network path supported by Mimi Remote.
 
+## Choose the package
+
+```bash
+uname -m
+```
+
+- `x86_64`: use `MimiRemote-AgentHost-macOS12.6-x86_64.tar.gz`.
+- `arm64`: use `MimiRemote-AgentHost-macOS12.6-arm64.tar.gz`.
+
+Both release binaries are validated by CI as Mach-O executables with minimum macOS version 12.0.
+
 ## Install
 
 ```bash
@@ -16,7 +27,13 @@ bash ./install.sh
 ~/.local/bin/agentd up
 ```
 
-`agentd up` prepares the normal Mimi Remote configuration, starts the user LaunchAgent, waits for readiness, and prints a short-lived pairing QR code.
+`agentd up` prepares the normal Mimi Remote configuration, starts the user LaunchAgent, waits for readiness, and prints a short-lived pairing QR code. Without Tailscale, macOS setup automatically uses an available private LAN IPv4 address when one is detected.
+
+If macOS blocks the personal unsigned binary after downloading it through a browser, inspect the downloaded archive and remove quarantine only after confirming it came from your own GitHub Release:
+
+```bash
+xattr -dr com.apple.quarantine ./MimiRemote-AgentHost-macOS12.6-*
+```
 
 Useful commands:
 
