@@ -1,0 +1,30 @@
+name: iOS 16 Source Snapshot
+
+on:
+  push:
+    branches:
+      - ios16-personal-beta
+    paths:
+      - ".github/workflows/ios16-source-snapshot.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ios16-source-snapshot
+          path: |
+            ios/MimiRemote/Sources
+            ios/MimiRemote/project.yml
+            ios/MimiRemote/MimiRemote.xcodeproj/project.pbxproj
+            .github/workflows/ios16-personal-beta.yml
+          if-no-files-found: error
+          retention-days: 1
