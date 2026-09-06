@@ -2,6 +2,10 @@
 
 This package is a personal compatibility host for macOS Monterey. It keeps the upstream Go `agentd` protocol and replaces the normal Homebrew/macOS 15 menu-bar service path with a user LaunchAgent.
 
+## Release channel
+
+This branch publishes a separate Personal Beta for Monterey and does not modify the normal macOS 15+ application release path. Release assets are split by Mac architecture and include SHA-256 checksums.
+
 ## Requirements
 
 - macOS 12.0 or later.
