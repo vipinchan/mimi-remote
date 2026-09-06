@@ -87,11 +87,11 @@ func runMacOS12LaunchdService(action string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if !installed {
-		if _, lookupErr := exec.LookPath("brew"); lookupErr != nil {
-			return ensureMacOS12LaunchAgentInstalled()
-		}
 		if action == "restart" {
 			return restartHomebrewService(stdout, stderr)
+		}
+		if _, lookupErr := exec.LookPath("brew"); lookupErr != nil {
+			return ensureMacOS12LaunchAgentInstalled()
 		}
 		return runBrewService(action, stdout, stderr)
 	}
