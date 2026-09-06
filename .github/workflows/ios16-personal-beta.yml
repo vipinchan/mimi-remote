@@ -40,7 +40,16 @@ jobs:
           go version
 
       - name: Apply iOS 16.5 compatibility layer
-        run: python3 scripts/apply-ios16-compat.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply-ios16-compat.py
+          cat >> ios/MimiRemote/Sources/RootView.swift <<'SWIFT'
+
+          extension ToolbarItem {
+              func mimiLegacyNoop() -> Self { self }
+          }
+          SWIFT
 
       - name: Build unsigned iOS 16.5 app
         shell: bash
