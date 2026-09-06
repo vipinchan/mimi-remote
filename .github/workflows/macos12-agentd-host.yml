@@ -1,0 +1,156 @@
+name: macOS 12 Agent Host
+
+on:
+  push:
+    branches:
+      - macos12-agentd-host
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macos12-agentd-host-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Apply Monterey service compatibility
+        run: |
+          set -euo pipefail
+          python3 scripts/apply-macos12-agentd-compat.py
+          gofmt -w cmd/agentd/main.go cmd/agentd/macos12_launchd_service.go
+
+      - name: Test affected Go packages
+        run: |
+          set -euo pipefail
+          go test ./cmd/agentd ./internal/config ./internal/setup ./internal/appserver
+
+      - name: Build macOS 12 agentd binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist/x86_64 dist/arm64
+          for arch in amd64 arm64; do
+            if [[ "$arch" == "amd64" ]]; then
+              out="dist/x86_64/agentd"
+            else
+              out="dist/arm64/agentd"
+            fi
+            echo "Building $arch -> $out"
+            CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" MACOSX_DEPLOYMENT_TARGET=12.0 \
+              go build -trimpath \
+                -ldflags="-s -w -X main.version=macos12-beta-${GITHUB_RUN_NUMBER}" \
+                -o "$out" ./cmd/agentd
+            file "$out"
+          done
+
+      - name: Verify Mach-O deployment target
+        shell: bash
+        run: |
+          set -euo pipefail
+          check_minos() {
+            local bin="$1"
+            local dump minos
+            dump="$(otool -l "$bin")"
+            minos="$(printf '%s\n' "$dump" | awk '
+              /cmd LC_BUILD_VERSION/ { in_build=1; next }
+              in_build && $1 == "minos" { print $2; exit }
+              /cmd LC_VERSION_MIN_MACOSX/ { in_legacy=1; next }
+              in_legacy && $1 == "version" { print $2; exit }
+            ')"
+            if [[ -z "$minos" ]]; then
+              echo "Could not determine minimum macOS version for $bin" >&2
+              exit 1
+            fi
+            echo "$bin min macOS: $minos"
+            python3 - "$minos" <<'PY'
+          import sys
+          parts = tuple(int(x) for x in sys.argv[1].split('.')[:3])
+          parts += (0,) * (3 - len(parts))
+          if parts > (12, 6, 0):
+              raise SystemExit(f"minimum macOS {sys.argv[1]} exceeds 12.6")
+          PY
+          }
+          check_minos dist/x86_64/agentd
+          check_minos dist/arm64/agentd
+
+      - name: Smoke test native binary and installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            arm64) native_dir="arm64" ;;
+            x86_64) native_dir="x86_64" ;;
+            *) echo "Unsupported runner architecture" >&2; exit 1 ;;
+          esac
+          dist/$native_dir/agentd version
+          bash -n packaging/macos12/install.sh
+          bash -n packaging/macos12/uninstall.sh
+          test_home="$RUNNER_TEMP/mimi-macos12-home"
+          mkdir -p "$test_home"
+          cp dist/$native_dir/agentd packaging/macos12/agentd
+          HOME="$test_home" bash packaging/macos12/install.sh
+          plutil -lint "$test_home/Library/LaunchAgents/com.vipinchan.mimi-remote.agentd.plist"
+          HOME="$test_home" "$test_home/.local/bin/agentd" version
+          rm -f packaging/macos12/agentd
+
+      - name: Package personal host builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          for arch in x86_64 arm64; do
+            name="MimiRemote-AgentHost-macOS12.6-$arch"
+            dir="$RUNNER_TEMP/$name"
+            rm -rf "$dir"
+            mkdir -p "$dir"
+            cp "dist/$arch/agentd" "$dir/agentd"
+            cp packaging/macos12/install.sh "$dir/install.sh"
+            cp packaging/macos12/uninstall.sh "$dir/uninstall.sh"
+            cp packaging/macos12/README.md "$dir/README.md"
+            chmod +x "$dir/agentd" "$dir/install.sh" "$dir/uninstall.sh"
+            tar -C "$RUNNER_TEMP" -czf "release/$name.tar.gz" "$name"
+          done
+          (cd release && shasum -a 256 *.tar.gz > SHA256SUMS)
+          ls -lh release
+          cat release/SHA256SUMS
+
+      - name: Upload host artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: MimiRemote-AgentHost-macOS12.6
+          path: release/*
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish personal prerelease
+        if: contains(github.event.head_commit.message, '[beta]')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="macos12-agentd-beta-${GITHUB_RUN_NUMBER}"
+          gh release create "$tag" \
+            release/MimiRemote-AgentHost-macOS12.6-x86_64.tar.gz \
+            release/MimiRemote-AgentHost-macOS12.6-arm64.tar.gz \
+            release/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Mimi Remote macOS 12 CLI Host Beta ${GITHUB_RUN_NUMBER}" \
+            --notes "Personal Monterey-compatible CLI host. Uses upstream agentd protocol with a user LaunchAgent instead of the macOS 15 menu-bar app/Homebrew service path. Includes Intel x86_64 and Apple Silicon arm64 builds; Mach-O minimum deployment target is validated not to exceed macOS 12.6." \
+            --prerelease
