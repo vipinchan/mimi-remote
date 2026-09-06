@@ -1,0 +1,100 @@
+name: Personal iOS 16.5 Beta
+
+on:
+  push:
+    branches:
+      - ios16-personal-beta
+    paths:
+      - "ios/MimiRemote/**"
+      - "experiments/tailcat/**"
+      - "scripts/build-tailcat-mobile.sh"
+      - ".github/workflows/ios16-personal-beta.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ios16-personal-beta-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Go for Tailcat
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: experiments/tailcat/go.mod
+          cache-dependency-path: experiments/tailcat/go.sum
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          go version
+
+      - name: Build unsigned iOS 16.5 app
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/mimi-derived" "$RUNNER_TEMP/mimi-ipa"
+          xcodebuild \
+            -project ios/MimiRemote/MimiRemote.xcodeproj \
+            -scheme MimiRemote \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/mimi-derived" \
+            IPHONEOS_DEPLOYMENT_TARGET=16.5 \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            build
+
+          app_path="$(find "$RUNNER_TEMP/mimi-derived/Build/Products" -type d -path '*Release-iphoneos/MimiRemote.app' -print -quit)"
+          [[ -n "$app_path" && -d "$app_path" ]] || {
+            echo "MimiRemote.app was not produced" >&2
+            exit 1
+          }
+
+          mkdir -p "$RUNNER_TEMP/mimi-ipa/Payload"
+          ditto "$app_path" "$RUNNER_TEMP/mimi-ipa/Payload/MimiRemote.app"
+          (
+            cd "$RUNNER_TEMP/mimi-ipa"
+            zip -qry "$GITHUB_WORKSPACE/MimiRemote-iOS16.5-Personal-Beta.ipa" Payload
+          )
+
+          /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$app_path/Info.plist"
+          shasum -a 256 "$GITHUB_WORKSPACE/MimiRemote-iOS16.5-Personal-Beta.ipa" \
+            | tee "$GITHUB_WORKSPACE/MimiRemote-iOS16.5-Personal-Beta.ipa.sha256"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: MimiRemote-iOS16.5-Personal-Beta
+          path: |
+            MimiRemote-iOS16.5-Personal-Beta.ipa
+            MimiRemote-iOS16.5-Personal-Beta.ipa.sha256
+          if-no-files-found: error
+
+      - name: Publish personal prerelease
+        if: contains(github.event.head_commit.message, '[beta]')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="ios16.5-beta-${GITHUB_RUN_NUMBER}"
+          gh release create "$tag" \
+            MimiRemote-iOS16.5-Personal-Beta.ipa \
+            MimiRemote-iOS16.5-Personal-Beta.ipa.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Mimi Remote iOS 16.5 Personal Beta ${GITHUB_RUN_NUMBER}" \
+            --notes "Personal compatibility build for iOS 16.5. Unsigned IPA intended for the repository owner's own device. Based on upstream Mimi Remote; newer iOS-only visual effects may be degraded or disabled." \
+            --prerelease
