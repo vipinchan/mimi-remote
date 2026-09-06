@@ -51,25 +51,51 @@ func macos12LaunchTarget() (string, error) {
 	return domain + "/" + macos12LaunchAgentLabel, nil
 }
 
-func ensureMacOS12LaunchAgentInstalled() error {
+func macos12LaunchAgentInstalled() (bool, error) {
 	path, err := macos12LaunchAgentPath()
+	if err != nil {
+		return false, err
+	}
+	info, err := os.Stat(path)
+	if err == nil {
+		return info.Mode().IsRegular(), nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, fmt.Errorf("检查 macOS 12 LaunchAgent 失败：%w", err)
+}
+
+func ensureMacOS12LaunchAgentInstalled() error {
+	installed, err := macos12LaunchAgentInstalled()
 	if err != nil {
 		return err
 	}
-	info, err := os.Stat(path)
-	if err == nil && info.Mode().IsRegular() {
+	if installed {
 		return nil
 	}
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("检查 macOS 12 LaunchAgent 失败：%w", err)
+	if _, err := exec.LookPath("brew"); err == nil {
+		return nil
 	}
+	path, _ := macos12LaunchAgentPath()
 	return fmt.Errorf("尚未安装 macOS 12 CLI Host LaunchAgent：%s\n请从 Personal Beta 解压目录运行：\n  bash ./install.sh", path)
 }
 
 func runMacOS12LaunchdService(action string, stdout, stderr io.Writer) error {
-	if err := ensureMacOS12LaunchAgentInstalled(); err != nil {
+	installed, err := macos12LaunchAgentInstalled()
+	if err != nil {
 		return err
 	}
+	if !installed {
+		if _, lookupErr := exec.LookPath("brew"); lookupErr != nil {
+			return ensureMacOS12LaunchAgentInstalled()
+		}
+		if action == "restart" {
+			return restartHomebrewService(stdout, stderr)
+		}
+		return runBrewService(action, stdout, stderr)
+	}
+
 	launchctl, err := exec.LookPath("launchctl")
 	if err != nil {
 		return fmt.Errorf("未找到 launchctl：%w", err)
@@ -101,10 +127,7 @@ func runMacOS12LaunchdService(action string, stdout, stderr io.Writer) error {
 	switch action {
 	case "start":
 		if !loaded {
-			if err := run("bootstrap", domain, plist); err != nil {
-				return err
-			}
-			return nil
+			return run("bootstrap", domain, plist)
 		}
 		return run("kickstart", "-k", target)
 	case "restart":
@@ -123,6 +146,13 @@ func runMacOS12LaunchdService(action string, stdout, stderr io.Writer) error {
 }
 
 func runMacOS12LaunchdLogs(lineCount int, follow bool, stdout, stderr io.Writer) error {
+	installed, err := macos12LaunchAgentInstalled()
+	if err != nil {
+		return err
+	}
+	if !installed {
+		return runHomebrewLogs(lineCount, follow, stdout, stderr)
+	}
 	path, err := macos12LogPath()
 	if err != nil {
 		return err
