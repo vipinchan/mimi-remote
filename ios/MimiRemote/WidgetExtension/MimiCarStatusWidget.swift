@@ -55,6 +55,25 @@ private struct MimiCarStatusWidgetView: View {
     let entry: MimiCarStatusEntry
 
     var body: some View {
+        Group {
+            if #available(iOSApplicationExtension 17.0, *) {
+                widgetContent
+                    .containerBackground(for: .widget) {
+                        Color(.secondarySystemBackground)
+                    }
+            } else {
+                widgetContent
+                    .background(Color(.secondarySystemBackground))
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilitySummary)
+        // 父级 accessibilityLabel 同样包含项目和会话标题；整组标记敏感，
+        // 避免锁屏 redaction 后 VoiceOver 仍从合并摘要朗读真实内容。
+        .privacySensitive(entry.snapshot != nil)
+    }
+
+    private var widgetContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             identityRow
             Spacer(minLength: 8)
@@ -63,14 +82,6 @@ private struct MimiCarStatusWidgetView: View {
             statusRow
         }
         .padding(14)
-        .containerBackground(for: .widget) {
-            Color(.secondarySystemBackground)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilitySummary)
-        // 父级 accessibilityLabel 同样包含项目和会话标题；整组标记敏感，
-        // 避免锁屏 redaction 后 VoiceOver 仍从合并摘要朗读真实内容。
-        .privacySensitive(entry.snapshot != nil)
     }
 
     private var identityRow: some View {
@@ -197,18 +208,6 @@ private struct MimiCarStatusWidgetBundle: WidgetBundle {
     var body: some Widget {
         MimiCarStatusWidget()
     }
-}
-
-#Preview(as: .systemSmall) {
-    MimiCarStatusWidget()
-} timeline: {
-    MimiCarStatusEntry(date: .now, snapshot: .widgetPreview())
-    MimiCarStatusEntry(
-        date: .now,
-        snapshot: .widgetPreview(
-            publishedAt: .now.addingTimeInterval(-CarStatusSnapshotV1.defaultStaleInterval)
-        )
-    )
 }
 
 private extension CarStatusSnapshotV1 {
