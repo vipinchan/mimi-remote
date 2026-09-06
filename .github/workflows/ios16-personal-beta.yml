@@ -133,5 +133,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Mimi Remote iOS 16.5 Personal Beta ${GITHUB_RUN_NUMBER}" \
-            --notes "Personal compatibility build for iOS 16.5. Unsigned IPA intended for the repository owner's own device. Based on upstream Mimi Remote; newer iOS-only visual effects may be degraded or disabled." \
+            --notes "Personal compatibility build for iOS 16.5. Unsigned IPA intended for the repository owner's own device. Based on upstream Mimi Remote; newer iOS-only visual effects may be degraded or disabled. Release build verified by GitHub Actions." \
             --prerelease
