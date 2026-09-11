@@ -3225,6 +3225,45 @@ final class ConversationDataFlowTests: XCTestCase {
         XCTAssertFalse(composerState.turnOptions.networkAccess)
     }
 
+    func testComposerPermissionMenuLabelDistinguishesCurrentAndNextTurn() {
+        XCTAssertEqual(
+            ComposerPermissionMenuLabel.resolve(
+                preservesThreadSettings: true,
+                selectedMode: .fullAccess,
+                selectedProfileID: "stale-profile",
+                activeProfileID: nil
+            ),
+            .inherited
+        )
+        XCTAssertEqual(
+            ComposerPermissionMenuLabel.resolve(
+                preservesThreadSettings: true,
+                selectedMode: .fullAccess,
+                selectedProfileID: nil,
+                activeProfileID: ":read-only"
+            ),
+            .sessionProfile(":read-only")
+        )
+        XCTAssertEqual(
+            ComposerPermissionMenuLabel.resolve(
+                preservesThreadSettings: false,
+                selectedMode: .readOnly,
+                selectedProfileID: nil,
+                activeProfileID: ":workspace"
+            ),
+            .nextMode(.readOnly)
+        )
+        XCTAssertEqual(
+            ComposerPermissionMenuLabel.resolve(
+                preservesThreadSettings: false,
+                selectedMode: .requestApproval,
+                selectedProfileID: "team-profile",
+                activeProfileID: ":workspace"
+            ),
+            .nextProfile("team-profile")
+        )
+    }
+
     func testBuiltInPermissionProfilesCollapseIntoUserModes() {
         XCTAssertEqual(ComposerPermissionMode(builtInPermissionProfileID: ":read-only"), .readOnly)
         XCTAssertEqual(ComposerPermissionMode(builtInPermissionProfileID: ":workspace"), .requestApproval)
@@ -3306,7 +3345,7 @@ final class ConversationDataFlowTests: XCTestCase {
         let composerState = ComposerState()
 
         XCTAssertNil(composerState.turnOptions.model)
-        XCTAssertEqual(composerState.turnOptions.reasoningEffort, .xhigh)
+        XCTAssertEqual(composerState.turnOptions.reasoningEffort, .medium)
         XCTAssertEqual(composerState.permissionMode, .fullAccess)
         XCTAssertEqual(composerState.turnOptions.approvalPolicy, .never)
         XCTAssertEqual(composerState.turnOptions.approvalsReviewer, "user")
@@ -3452,6 +3491,27 @@ final class ConversationDataFlowTests: XCTestCase {
         XCTAssertEqual(restored.serviceTier, "priority")
     }
 
+    func testDefaultModelPreferencesUseGPT6MediumWithoutSavedSelection() throws {
+        let suiteName = "DefaultModelPreferencesInitialTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        var options = CodexAppServerTurnOptions.default
+        DefaultModelPreferences.applyDefault(
+            for: "codex",
+            allOptions: [],
+            defaults: defaults,
+            to: &options
+        )
+
+        XCTAssertEqual(options.model, "gpt-6-astra")
+        XCTAssertEqual(options.reasoningEffort, .medium)
+        XCTAssertEqual(CodexAppServerModelOption.builtInFallback.filter(\.isDefault).map(\.model), ["gpt-6-astra"])
+        XCTAssertEqual(CodexAppServerModelOption.builtInFallback.first?.defaultReasoningEffort, "medium")
+        XCTAssertNil(DefaultModelPreferences.storedModelOptionID(for: "codex", in: defaults))
+        XCTAssertNil(DefaultModelPreferences.storedReasoningEffort(for: "codex", in: defaults))
+    }
+
     func testDefaultModelPreferencesKeepCodexAndClaudeIndependent() throws {
         let suiteName = "DefaultModelPreferencesTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -3522,26 +3582,29 @@ final class ConversationDataFlowTests: XCTestCase {
         defaults.set("removed-model", forKey: DefaultModelPreferences.codexModelOptionIDKey)
         defaults.set(CodexAppServerReasoningEffort.ultra.rawValue, forKey: DefaultModelPreferences.codexReasoningEffortKey)
 
+        let luna = try XCTUnwrap(
+            CodexAppServerModelOption.builtInFallback.first { $0.model == "gpt-5.6-luna" }
+        )
         let selection = try XCTUnwrap(
             DefaultModelPreferences.resolvedSelection(
                 for: DefaultModelRuntime.codex.rawValue,
-                allOptions: [CodexAppServerModelOption.builtInFallback[2]],
+                allOptions: [luna],
                 defaults: defaults
             )
         )
 
         XCTAssertEqual(selection.option.model, "gpt-5.6-luna")
-        XCTAssertEqual(selection.effort, .xhigh)
+        XCTAssertEqual(selection.effort, .medium)
 
         var turnOptions = CodexAppServerTurnOptions.default
         DefaultModelPreferences.applyDefault(
             for: DefaultModelRuntime.codex.rawValue,
-            allOptions: [CodexAppServerModelOption.builtInFallback[2]],
+            allOptions: [luna],
             defaults: defaults,
             to: &turnOptions
         )
         XCTAssertEqual(turnOptions.model, "gpt-5.6-luna")
-        XCTAssertEqual(turnOptions.reasoningEffort, .xhigh)
+        XCTAssertEqual(turnOptions.reasoningEffort, .medium)
     }
 
     func testComposerDraftCacheKeepsDraftsScopedToSessionOrNewProject() {

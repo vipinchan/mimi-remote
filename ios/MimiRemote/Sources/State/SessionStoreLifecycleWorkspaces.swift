@@ -23,6 +23,10 @@ extension SessionStore {
             return
         }
 #endif
+        // RootView 在 Tailcat 选路和 preflight 之前就持有了预热窗口；这里再持有一份，
+        // 保证从任何分支返回时都归还，未配置或提前退出的启动不会把过渡留在屏幕上。
+        let warmUpToken = beginConnectionWarmUp()
+        defer { endConnectionWarmUp(warmUpToken) }
         guard appStore.isConfigured else {
             return
         }
@@ -482,6 +486,11 @@ extension SessionStore {
     // 慢退避白等。按总时长封顶而非固定次数，后端晚十几二十秒才起来也能等到，不会提前放弃又卡回
     // “要杀进程”的老问题。
     func refreshUntilLoaded(maxWait: TimeInterval, autoAttach: Bool) async {
+        // 整个退避重试期都属于首屏的预热窗口：中途的 errorMessage 只是本轮尝试的结果，
+        // 直到这里返回才可能成为对用户的结论。冷启动可能有多个循环并发跑，各自持有一份，
+        // 先结束的那个不会替仍在重试的那个下结论。
+        let warmUpToken = beginConnectionWarmUp()
+        defer { endConnectionWarmUp(warmUpToken) }
         let deadline = Date().addingTimeInterval(max(0, maxWait))
         var attempt = 0
         while true {
@@ -567,6 +576,7 @@ extension SessionStore {
             recordCarStatusHostObservation(at: sessionListNow())
             setProjectsIfChanged(fetchedProjects)
             reloadRecentWorkspaces()
+            loadedWorkspaceCatalogScope = appStore.activeHostScope
             if let requestedProjectID,
                sidebarProjectsByID[requestedProjectID] == nil,
                let project = projectsByID[requestedProjectID] {
@@ -671,7 +681,8 @@ extension SessionStore {
                 workspace: workspace,
                 page: page,
                 consistency: consistency,
-                requestedCursor: result.requestedCursor
+                requestedCursor: result.requestedCursor,
+                requestLineage: result.requestLineage
             )
 
             if isSelectionLeaseCurrent(foregroundLease),
@@ -726,7 +737,7 @@ extension SessionStore {
                     reportForeground: isSelectionLeaseCurrent(foregroundLease)
                 )
             } else if isSelectionLeaseCurrent(foregroundLease) {
-                setErrorMessage(error.localizedDescription)
+                setErrorMessage(error.localizedDescription, origin: .connectionProbe)
             }
         }
     }
@@ -808,7 +819,7 @@ extension SessionStore {
                 throw AgentAPIError.invalidResponse
             }
 
-            try await refreshWorkspaceSessions(projectID: projectID)
+            try await refreshWorkspaceSessions(projectID: projectID, restartFromFirst: false)
             guard needsAuthoritativeWorkspaceSessionFirstPage(projectID: projectID) else {
                 return
             }
@@ -831,7 +842,10 @@ extension SessionStore {
 
     /// 刷新工作区页正在浏览的会话，但不改变全局会话选择或 WebSocket。
     /// 工作区页有自己的本地浏览选择，不能复用 selectProject，否则刷新另一个目录会打断当前任务。
-    func refreshWorkspaceSessions(projectID: String) async throws {
+    func refreshWorkspaceSessions(
+        projectID: String,
+        restartFromFirst: Bool = true
+    ) async throws {
 #if DEBUG
         guard !isDebugWorkbenchUISeedActive else { return }
 #endif
@@ -857,9 +871,10 @@ extension SessionStore {
                 workspace: workspace,
                 limit: Self.initialSessionPageLimit,
                 reuseRecent: false,
-                // 用户明确点刷新时绕过可能滞后的 State DB 索引；后台轮询仍保留快速路径。
+                // 用户刷新读取最新首屏并校正归档状态；索引与扫描策略由 Runtime 决定。
                 consistency: .authoritative,
-                source: .workspaceForeground
+                source: .workspaceForeground,
+                restartFromFirst: restartFromFirst
             )
             let page = result.page
             guard isCurrentSessionPageRequest(projectID: workspace.id, token: requestToken) else {
@@ -872,7 +887,9 @@ extension SessionStore {
                 consistency: .authoritative,
                 requestedCursor: result.requestedCursor,
                 // 工作区页下拉刷新首屏时，保留用户已经翻到的旧页，避免列表突然收缩回 20 条。
-                preserveAllLoaded: sessionProjectsWithAdditionalPages.contains(workspace.id)
+                preserveAllLoaded: sessionProjectsWithAdditionalPages.contains(workspace.id),
+                restartsFromFirst: restartFromFirst,
+                requestLineage: result.requestLineage
             )
         } catch {
             _ = terminateConnectionIfCredentialsInvalid(error)

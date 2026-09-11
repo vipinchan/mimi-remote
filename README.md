@@ -126,7 +126,7 @@ flowchart LR
     Gateway <--> Claude
 ```
 
-This repository ships the complete link: the native iPhone/iPad app, the Go `agentd` gateway for macOS, Windows, and Linux, the Mac menu bar app, the Windows tray app, and the Claude Code compatibility bridge. The mobile app connects only to your own host computer, so project files, session history, and runtime credentials stay on that computer.
+This repository ships the complete link: the native iPhone/iPad app, the Go `agentd` gateway for macOS, Windows, and Linux, the Mac menu bar app, the Windows and Linux tray apps, and the Claude Code compatibility bridge. The mobile app connects only to your own host computer, so project files, session history, and runtime credentials stay on that computer.
 
 - **Direct and responsive:** private-network REST and WebSocket connections carry live output, follow-up messages, task controls, and approvals without a Mimi-operated application relay.
 - **Platform-specific Codex transport:** Linux and local terminal clients share one resident App Server through Codex's standard Unix control socket. macOS reaches the same socket through SSH, while Windows lets `agentd` own a loopback-only WebSocket App Server. None of these paths uses Desktop private IPC.
@@ -163,6 +163,8 @@ The per-user installer registers a limited Task Scheduler task and preserves con
 Private-LAN access is opt-in. Setup only enables it on a Private Windows network profile and limits the firewall rule to `LocalSubnet`; otherwise the host remains loopback-only unless Tailscale is available. See the [full install, upgrade, and rollback guide](docs/install-upgrade-rollback.md) for verification and recovery commands.
 
 ### Linux host
+
+The Linux release includes a desktop tray with host status, Tailcat/Tailscale/LAN pairing, diagnostics, logs, and service controls. It uses theme-aware symbolic icons and StatusNotifierItem on compatible desktops; QR codes and confirmations open in your terminal. See [Linux desktop tray](docs/linux-tray.md) for desktop requirements and recovery steps.
 
 Linux uses the release archive and a per-user systemd service. Install and sign in to Codex CLI 0.149.1 or later as the same Linux user, verify the release checksums, extract the archive, and run `bash ./scripts/install-linux.sh install`.
 
@@ -304,7 +306,8 @@ This remains an experimental channel. Goal, archive, and fork are not available 
 - Mimi Remote is not a general-purpose SSH terminal and does not run Codex inside the iOS sandbox.
 - Shared Codex sessions must be opened from a Desktop SSH host. Desktop's ordinary “This Mac” mode has private capabilities that are not injected into the shared App Server.
 - It has no cloud account, code-hosting proxy, public relay, arbitrary remote shell, unattended deletion, or multi-user sharing.
-- One iOS WebSocket can attach to a session at a time. Cloud/projectless threads, background push, offline remote notifications, profile sync, and IDE sync are not implemented.
+- One iOS WebSocket can attach to a session at a time. Cloud/projectless threads, profile sync, and IDE sync are not implemented.
+- Lock Screen approval reminders are an opt-in experiment that relies on a small maintainer-operated push service. They are off by default, and only command and file-change approvals can be answered without opening the app.
 - A private Tailscale address is recommended across networks. Without Tailscale, Mimi Remote can use a private LAN address only while both devices are on the same local network. Do not expose `agentd` directly to the public Internet.
 - Claude Code support depends on external CLI and bridge behavior, has a smaller feature surface, and must not be treated as the default runtime.
 
@@ -313,6 +316,8 @@ For the complete, code-oriented capability matrix and risk list, see [project st
 ## Privacy and security
 
 Mimi Remote has no ads, analytics SDK, or maintainer-operated telemetry service. Project content, conversations, logs, code, and Codex/Claude credentials remain on your devices unless you explicitly use a third-party service such as Codex, Claude Code, GitHub, Codex voice transcription, or MCP. Apple voice input uses on-device SpeechAnalyzer processing.
+
+Lock Screen approval reminders are the one optional exception, and they are off by default. Turning them on registers this install with a small maintainer-operated service so Apple can deliver a reminder while the app is suspended. That service receives only the APNs device token, anonymous short tags for the Mac and session, the approval kind, and an expiry — never prompts, commands, file contents, session history, or your `agentd` token. Your allow and deny actions still go straight to your own Mac. See the [architecture note](docs/secure-approval-push-architecture.md) and the [operations runbook](docs/operations/push-provider-ops.zh-CN.md).
 
 The app rejects public HTTP endpoints at the application layer and is designed for Tailscale or same-LAN private-network use. Do not put real tokens, Tailnet IPs, private paths, logs, or project content in public issues, pull requests, or screenshots. Report vulnerabilities privately using [SECURITY.md](SECURITY.md). See the bilingual [privacy policy](docs/privacy-policy.md), [terms of use](docs/terms-of-use.md), [trademark and brand policy](TRADEMARKS.md), and [support page](docs/support.md).
 

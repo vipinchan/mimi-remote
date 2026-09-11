@@ -445,8 +445,8 @@ final class CodexAppServerProtocolTests: XCTestCase {
         XCTAssertEqual(request.method, "turn/start")
         XCTAssertEqual(params["cwd"]?.stringValue, "/Users/me/repo")
         XCTAssertNil(params["model"]?.stringValue)
-        XCTAssertEqual(params["effort"]?.stringValue, "xhigh")
-        XCTAssertEqual(params["approvalPolicy"]?.stringValue, "on-request")
+        XCTAssertEqual(params["effort"]?.stringValue, "medium")
+        XCTAssertEqual(params["approvalPolicy"]?.stringValue, "never")
         XCTAssertEqual(params["clientUserMessageId"]?.stringValue, "client-1")
         XCTAssertEqual(params["collaborationMode"]?.objectValue?["mode"]?.stringValue, "default")
 
@@ -818,7 +818,7 @@ final class CodexAppServerProtocolTests: XCTestCase {
         XCTAssertEqual(standardMode["mode"]?.stringValue, "default")
         let standardSettings = try XCTUnwrap(standardMode["settings"]?.objectValue)
         XCTAssertNil(standardSettings["model"]?.stringValue)
-        XCTAssertEqual(standardSettings["reasoning_effort"]?.stringValue, "xhigh")
+        XCTAssertEqual(standardSettings["reasoning_effort"]?.stringValue, "medium")
         XCTAssertEqual(standardSettings["developer_instructions"], .null)
     }
 
@@ -827,7 +827,7 @@ final class CodexAppServerProtocolTests: XCTestCase {
         let decoded = try JSONDecoder().decode(CodexAppServerTurnOptions.self, from: legacy)
 
         XCTAssertNil(decoded.model)
-        XCTAssertEqual(decoded.reasoningEffort, .xhigh)
+        XCTAssertEqual(decoded.reasoningEffort, .medium)
         XCTAssertEqual(decoded.approvalPolicy, .onRequest)
         XCTAssertEqual(decoded.sandboxMode, .dangerFullAccess)
         XCTAssertEqual(decoded.collaborationMode, .default)
@@ -1042,6 +1042,24 @@ final class CodexAppServerProtocolTests: XCTestCase {
         XCTAssertEqual(queryItems.first(where: { $0.name == "thread_id" })?.value, "thr_claude")
     }
 
+    // 有名探针也会占用常驻 broker 槽位；Codex 必须省略 session，使用网关已有的短连接路径。
+    func testCodexProbeGatewayURLDoesNotUseResidentBrokerSession() throws {
+        func sessionKey(_ url: URL) -> String? {
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            return items.first(where: { $0.name == "session" })?.value
+        }
+        let resident = try XCTUnwrap(sessionKey(CodexAppServerSessionRuntime.gatewayURL(
+            endpoint: "http://127.0.0.1:8787", sessionID: "", purpose: .resident)))
+        let probe = try sessionKey(CodexAppServerSessionRuntime.gatewayURL(
+            endpoint: "http://127.0.0.1:8787", sessionID: "", purpose: .probe))
+
+        XCTAssertNil(probe)
+        XCTAssertTrue(resident.hasSuffix("-codex"))
+        let claudeProbe = try sessionKey(CodexAppServerSessionRuntime.gatewayURL(
+            endpoint: "http://127.0.0.1:8787", sessionID: "", runtimeProvider: "claude", purpose: .probe))
+        XCTAssertTrue(try XCTUnwrap(claudeProbe).hasSuffix("-claude-probe"))
+    }
+
     // 真实连接的 thread_id 是空的（一条连接承载所有线程），所以能不能接回常驻会话
     // 全看这个 session 键。它必须存在、跨调用稳定、且落在网关的字符集白名单里。
     func testGatewayURLCarriesStableSessionKey() throws {
@@ -1203,7 +1221,8 @@ final class CodexAppServerProtocolTests: XCTestCase {
         )
         let turnParams = try XCTUnwrap(turnStart.params?.objectValue)
         let sandbox = try XCTUnwrap(turnParams["sandboxPolicy"]?.objectValue)
-        XCTAssertEqual(turnParams["approvalPolicy"]?.stringValue, "on-request")
+        // 旧草稿的完全访问在发送新回合时统一为 Desktop 的 never 策略。
+        XCTAssertEqual(turnParams["approvalPolicy"]?.stringValue, "never")
         XCTAssertEqual(sandbox["type"]?.stringValue, "dangerFullAccess")
         XCTAssertEqual(sandbox["networkAccess"]?.boolValue, false)
     }
@@ -1490,7 +1509,7 @@ final class CodexAppServerProtocolTests: XCTestCase {
     }
 
     func testCodexStandardMenuUsesModelSpecificFourthEffort() {
-        let options = CodexAppServerModelOption.builtInFallback
+        let options = CodexAppServerModelOption.builtInFallback.filter { $0.model.hasPrefix("gpt-5.6-") }
         let sol = options[0]
         let terra = options[1]
         let luna = options[2]
@@ -1528,7 +1547,7 @@ final class CodexAppServerProtocolTests: XCTestCase {
             [.medium, .high, .xhigh, .max]
         )
         XCTAssertEqual(sol.defaultReasoningEffort, "xhigh")
-        XCTAssertTrue(sol.isDefault)
+        XCTAssertFalse(sol.isDefault)
         XCTAssertEqual(terra.defaultReasoningEffort, "medium")
         XCTAssertEqual(luna.defaultReasoningEffort, "medium")
         XCTAssertTrue(ModelReasoningGridCatalog.supports(.ultra, option: sol))
@@ -1546,7 +1565,7 @@ final class CodexAppServerProtocolTests: XCTestCase {
         XCTAssertEqual(ModelReasoningGridCatalog.effortTitle(.ultra), "Ultra")
     }
 
-    func testPreferredCodexDefaultOverridesServerDefaultWithSolXHigh() throws {
+    func testPreferredCodexDefaultOverridesServerDefaultWithGPT6Medium() throws {
         let options = [
             CodexAppServerModelOption(
                 id: "gpt-5.6-terra",
@@ -1556,12 +1575,12 @@ final class CodexAppServerProtocolTests: XCTestCase {
                 supportedReasoningEfforts: ["medium", "high", "xhigh"]
             ),
             CodexAppServerModelOption(
-                id: "gpt-5.6-sol",
-                title: "GPT-5.6 Sol",
+                id: "gpt-6-astra",
+                title: "GPT-6 Astra",
                 provider: "openai",
                 runtimeProvider: "codex",
                 supportedReasoningEfforts: ["medium", "high", "xhigh", "ultra"],
-                defaultReasoningEffort: "medium"
+                defaultReasoningEffort: "xhigh"
             )
         ]
         let option = try XCTUnwrap(
@@ -1572,14 +1591,14 @@ final class CodexAppServerProtocolTests: XCTestCase {
         )
         let layout = ModelReasoningGridCatalog.layout(runtimeProvider: "codex", options: options)
 
-        XCTAssertEqual(option.model, "gpt-5.6-sol")
+        XCTAssertEqual(option.model, "gpt-6-astra")
         XCTAssertEqual(
             ModelReasoningGridCatalog.preferredDefaultEffort(
                 runtimeProvider: "codex",
                 option: option,
                 layout: layout
             ),
-            .xhigh
+            .medium
         )
     }
 
@@ -1672,7 +1691,7 @@ final class CodexAppServerProtocolTests: XCTestCase {
                 layout: layout
             ),
             .medium,
-            "账号没有 Sol 时必须使用目录内可发送组合，不能硬编码未授权模型"
+            "账号没有 GPT-6 时必须使用目录内可发送组合，不能硬编码未授权模型"
         )
     }
 
@@ -1761,8 +1780,8 @@ final class CodexAppServerProtocolTests: XCTestCase {
         XCTAssertNil(options.serviceTier)
     }
 
-    func testLeavingDeveloperMaxFallsBackToStandardCodexEffort() {
-        let sol = CodexAppServerModelOption.builtInFallback[0]
+    func testLeavingDeveloperMaxFallsBackToStandardCodexEffort() throws {
+        let sol = try XCTUnwrap(CodexAppServerModelOption.builtInFallback.first { $0.model == "gpt-5.6-sol" })
         let layout = ModelReasoningGridCatalog.layout(runtimeProvider: "codex", options: [sol])
 
         XCTAssertTrue(ModelReasoningGridCatalog.supports(.max, option: sol))
@@ -1936,6 +1955,68 @@ final class CodexAppServerProtocolTests: XCTestCase {
         XCTAssertEqual(message.id, "appserver:turn-1:item-1")
         XCTAssertEqual(message.sessionID, "thread-1")
         XCTAssertEqual(message.content, "hello world")
+    }
+
+    @MainActor
+    func testProjectorSequenceSurvivesRuntimeRebuildSoShortReplyIsNotDroppedAsStale() throws {
+        // 进后台/切主机会整体重建 runtime 和投影器。旧投影器已经给这个 thread 发过序号 1...3；
+        // 新投影器若从 1 重来，重建后第一条回复会被 ConversationStore 的水位线当成陈旧重放丢掉，
+        // 而 turn 完成不走水位线——表现为「完成震动响了、气泡没出现」。
+        let clock = CodexAppServerEventSequenceClock()
+        let store = ConversationStore()
+        let sessionID = "thread-rebuild"
+
+        var firstProjector = CodexAppServerEventProjector(sequenceClock: clock)
+        guard case .messageCompleted(let firstMessage, let firstMetadata) = firstProjector.project(
+            CodexAppServerNotification(method: "item/completed", params: .object([
+                "threadId": .string(sessionID),
+                "turnId": .string("turn-1"),
+                "item": .object([
+                    "id": .string("item-1"),
+                    "type": .string("agentMessage"),
+                    "text": .string("第一轮的长回复")
+                ])
+            ]))
+        ) else {
+            return XCTFail("expected first completed message")
+        }
+        guard case .turnCompleted(let firstTurnMetadata) = firstProjector.project(
+            CodexAppServerNotification(method: "turn/completed", params: .object([
+                "threadId": .string(sessionID),
+                "turn": .object(["id": .string("turn-1"), "status": .string("completed")])
+            ]))
+        ) else {
+            return XCTFail("expected first turn completion")
+        }
+        store.completeMessage(firstMessage, metadata: firstMetadata, fallbackSessionID: sessionID)
+        store.markCurrentAssistantCompleted(metadata: firstTurnMetadata, fallbackSessionID: sessionID)
+        XCTAssertEqual(store.lastSeenSeq(for: sessionID), firstTurnMetadata.seq)
+
+        var rebuiltProjector = CodexAppServerEventProjector(sequenceClock: clock)
+        guard case .messageCompleted(let secondMessage, let secondMetadata) = rebuiltProjector.project(
+            CodexAppServerNotification(method: "item/completed", params: .object([
+                "threadId": .string(sessionID),
+                "turnId": .string("turn-2"),
+                "item": .object([
+                    "id": .string("item-2"),
+                    "type": .string("agentMessage"),
+                    "text": .string("收到，消息正常。")
+                ])
+            ]))
+        ) else {
+            return XCTFail("expected rebuilt completed message")
+        }
+        XCTAssertGreaterThan(
+            try XCTUnwrap(secondMetadata.seq),
+            try XCTUnwrap(firstTurnMetadata.seq),
+            "重建后的投影器必须接着同一 thread 的序号继续发，不能从 1 重来"
+        )
+
+        store.completeMessage(secondMessage, metadata: secondMetadata, fallbackSessionID: sessionID)
+        XCTAssertTrue(
+            store.messages(for: sessionID).contains { $0.role == .assistant && $0.content == "收到，消息正常。" },
+            "重建 runtime 后的短回复不能被水位线当成陈旧事件丢掉"
+        )
     }
 
     func testProjectorMapsCompletedGeneratedAndViewedImages() throws {

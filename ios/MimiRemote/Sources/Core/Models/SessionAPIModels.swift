@@ -45,7 +45,7 @@ struct SessionsPage: Equatable {
 enum SessionListConsistency: Hashable {
     /// 默认使用 State DB 索引；发现应位于当前页的已知会话缺失时由 runtime 自动回退扫描。
     case fastIndexed
-    /// 用户主动刷新时直接扫描历史，作为索引暂时落后的权威恢复路径。
+    /// 用户主动刷新时读取服务端最新列表并校正本地状态；具体索引与扫描策略由 runtime 决定。
     case authoritative
 }
 
@@ -649,7 +649,7 @@ enum CodexAppServerPersonality: String, Codable, CaseIterable, Hashable, Identif
 
 private enum CodexAppServerDefaults {
     static let model: String? = nil
-    static let reasoningEffort: CodexAppServerReasoningEffort = .xhigh
+    static let reasoningEffort: CodexAppServerReasoningEffort = .medium
 }
 
 enum CodexAppServerApprovalPolicy: String, Codable, CaseIterable, Hashable, Identifiable {
@@ -897,6 +897,14 @@ struct CodexAppServerTurnOptions: Codable, Hashable {
     func sanitizedForRuntimePolicy() -> CodexAppServerTurnOptions {
         var sanitized = self
         guard sanitized.runtimeProvider?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "claude" else {
+            // Desktop 的完全访问始终是 never/user。旧草稿曾为旧网关保存 on-request，
+            // 必须在发送和确认前统一，不能等网关改写后仍匹配旧审批策略。
+            if !sanitized.preservesThreadPermissionSettings,
+               sanitized.permissionProfileID == ":danger-full-access"
+                || (sanitized.permissionProfileID?.isEmpty != false && sanitized.sandboxMode == .dangerFullAccess) {
+                sanitized.approvalPolicy = .never
+                sanitized.approvalsReviewer = "user"
+            }
             return sanitized
         }
         // Claude 只开放 default / plan / auto 三档安全映射。旧草稿或高级 JSON 即使携带
@@ -915,19 +923,6 @@ struct CodexAppServerTurnOptions: Codable, Hashable {
         }
         sanitized.networkAccess = false
         return sanitized
-    }
-
-    func adjustedForRemoteNoApprovalSupport(_ isSupported: Bool) -> CodexAppServerTurnOptions {
-        guard !isSupported,
-              approvalPolicy == .never,
-              sandboxMode == .dangerFullAccess
-        else { return self }
-        var adjusted = self
-        // 旧 agentd 会拒绝所有 approvalPolicy=never。保留完全文件访问沙盒，
-        // 只把审批策略降级为 on-request，避免新会话在进入 Codex 前直接失败。
-        adjusted.approvalPolicy = .onRequest
-        adjusted.approvalsReviewer = "user"
-        return adjusted
     }
 
     private mutating func applyStandardComposerPermissionPreset() {
@@ -1256,10 +1251,17 @@ struct CodexAppServerModelOption: Codable, Hashable, Identifiable {
 
     static let builtInFallback: [CodexAppServerModelOption] = [
         CodexAppServerModelOption(
+            id: "gpt-6-astra",
+            title: "GPT-6 Astra",
+            description: "Our most capable model for complex, demanding work.",
+            isDefault: true,
+            supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+            defaultReasoningEffort: "medium"
+        ),
+        CodexAppServerModelOption(
             id: "gpt-5.6-sol",
             title: "GPT-5.6 Sol",
             description: "Detail and polish",
-            isDefault: true,
             supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
             defaultReasoningEffort: "xhigh"
         ),
