@@ -127,6 +127,8 @@ final class SessionStore: ObservableObject {
     @Published var expandedProjectIDs: Set<String> = []
     @Published var showingAllSessionProjectIDs: Set<String> = []
     @Published var isLoading = false
+    // 加载完成只属于当前主机代次，切换主机后不能沿用旧目录的空态判断。
+    @Published var loadedWorkspaceCatalogScope: HostScope?
     @Published var webSocketStatus: WebSocketStatus = .disconnected
     @Published var connectionTermination: ConnectionTerminationStatus? {
         didSet {
@@ -145,6 +147,9 @@ final class SessionStore: ObservableObject {
     var carStatusLastSuccessfulHostObservationAt: Date?
     @Published var statusMessage: String?
     @Published var errorMessage: String?
+    /// `errorMessage` 当前这条的来源，由 `setErrorMessage` 维护。预热窗口只压探测失败，
+    /// 用户主动操作的失败任何时候都要照常展示。
+    @Published var errorMessageOrigin: SessionErrorOrigin = .userAction
     @Published var isRefreshingSelectedSession = false
     @Published var isUpdatingThreadGoal = false
     @Published var threadGoalErrorMessage: String?
@@ -230,6 +235,12 @@ final class SessionStore: ObservableObject {
     /// 只驱动主机选择器和写操作禁用态，不承载探活结果，避免状态圆点刷新整棵工作台。
     @Published private(set) var connectionSwitchTargetProfileID: String?
     @Published private(set) var latestFileUploadCompletion: FileUploadCompletionEvent?
+    /// 首次连接这台电脑的预热窗口。冷启动的隧道建立、agentd 网关上游就绪都允许失败重试，
+    /// 窗口内的失败是过程而不是结论，界面必须给出连接过渡而不是错误态。
+    /// 只由 `SessionStoreConnectionWarmUp` 的 begin/end 维护，别处不要直接写。
+    @Published var isConnectionWarmUpActive = false
+    var liveConnectionWarmUpTokens: Set<Int> = []
+    var nextConnectionWarmUpToken = 0
 
     var isConnectionSwitchInProgress: Bool {
         connectionSwitchTargetProfileID != nil
@@ -409,6 +420,8 @@ final class SessionStore: ObservableObject {
     var queuedGuidanceDispatchClientMessageIDs: Set<ClientMessageID> = []
     var turnCompletionReconciliationGeneration: UInt64 = 0
     var turnCompletionReconciliationJobsBySessionID: [SessionID: TurnCompletionReconciliationJob] = [:]
+    /// 一次历史读取可补齐多个 turn；缺口只有在正文落地后才移除。
+    var missingAssistantReplyBackfillJobsBySessionID: [SessionID: MissingAssistantReplyBackfillJob] = [:]
     // 最终回答通常紧跟 turn/completed。仅在通知缺失时按有限退避读取最新完整 Turn，
     // 避免健康 WebSocket 下等待 60 秒列表轮询仍无法释放本地队列。
     var turnCompletionReconciliationDelaysNanoseconds: [UInt64] = [
@@ -452,6 +465,7 @@ final class SessionStore: ObservableObject {
     var sessionFirstPageWaiterCountByProjectID: [String: Int] = [:]
     var sessionListFirstPageInFlightByKey: [SessionListFirstPageRequestKey: SessionListFirstPageInFlight] = [:]
     var sessionListFirstPageCacheByKey: [SessionListFirstPageRequestKey: SessionListFirstPageCacheEntry] = [:]
+    var sessionListRequestLineageByWorkspaceKey: [WorkspaceSessionFirstPageKey: UUID] = [:]
     @Published var workspaceSessionFirstPageCompletionByKey: [WorkspaceSessionFirstPageKey: WorkspaceSessionFirstPageCompletion] = [:]
     var sessionListCooldownUntilByBudgetKey: [SessionListBudgetKey: Date] = [:]
     var sessionListReconciliationTasksByProjectID: [String: Task<Void, Never>] = [:]
@@ -738,6 +752,7 @@ final class SessionStore: ObservableObject {
         missingRunningSessionReconciliationTasksByID.values.forEach { $0.cancel() }
         queuedSessionReconnectTasks.values.forEach { $0.cancel() }
         turnCompletionReconciliationJobsBySessionID.values.forEach { $0.task.cancel() }
+        missingAssistantReplyBackfillJobsBySessionID.values.forEach { $0.task?.cancel() }
         networkPathStatusSource.stop()
     }
 

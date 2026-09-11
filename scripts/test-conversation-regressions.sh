@@ -68,7 +68,11 @@ echo "==> iOS conversation regressions"
 # - PairingLinkTests：Endpoint allowlist、ATS 传输策略、Host capability 隔离和 stale lease。
 # - DoctorDiagnosticsTests：结构化 Doctor 响应、HTTP 错误和向后兼容。
 # - ProtocolContractTests：iOS/agentd 当前、上一版和明确不兼容的版本窗口。
+# - ManagedConnectionEntitlementStoreTests、ManagedConnectionEntitlementAPIClientTests、
+#   ManagedConnectionStoreKitClientTests：订阅状态机、服务端授权契约和 StoreKit 适配。
 # - LocalizationTests：日常单次 XCTest 内覆盖双语资源和 App 内显式语言切换。
+# - NotificationTitleCacheTests、NotificationContentRewriterTests：会话标题的 App Group 本地缓存，
+#   以及通知扩展只用该缓存在设备上改写锁屏文案、缓存缺失时退回通用文案。
 bash "$ROOT_DIR/scripts/ios-dev.sh" test \
   -quiet \
   -collect-test-diagnostics never \
@@ -79,6 +83,14 @@ bash "$ROOT_DIR/scripts/ios-dev.sh" test \
   -only-testing:MimiRemoteTests/CodexAppServerProtocolTests \
   -only-testing:MimiRemoteTests/ConversationDataFlowTests/testCodexAppServerFakeSmokeCoversThreadTurnAndApproval \
   -only-testing:MimiRemoteTests/ConversationDataFlowTests/testSessionStoreConsumesDirectAppServerEventsWithoutMobileProtocolConversion \
+  -only-testing:MimiRemoteTests/ConversationDataFlowTests/testCodexAuthoritativeFirstPageReadsFreshIndexIncludingExternalUnarchive \
+  -only-testing:MimiRemoteTests/ConversationDataFlowTests/testCodexAuthoritativeEmptyIndexFallsBackToHistoryScan \
+  -only-testing:MimiRemoteTests/ConversationDataFlowTests/testExternalArchiveDoesNotPermanentlyDisableDirectoryIndex \
+  -only-testing:MimiRemoteTests/ConversationDataFlowTests/testCodexContinuationUsesIndexWithoutRepairingFirstPageRows \
+  -only-testing:MimiRemoteTests/ConversationDataFlowTests/testCodexGlobalDiscoveryUsesIndexAcrossPages \
+  -only-testing:MimiRemoteTests/ConversationDataFlowTests/testCodexGlobalDiscoveryFallsBackWhenIndexUnsupported \
+  -only-testing:MimiRemoteTests/ConversationDataFlowTests/testScanFallbackContinuationKeepsItsQueryModeForDirectoryAndGlobalLists \
+  -only-testing:MimiRemoteTests/ConversationDataFlowTests/testGlobalIndexRepairsKnownMissingSessionsAcrossFilteredAndCompletePages \
   -only-testing:MimiRemoteTests/ConversationDataFlowTests/testCodexAppServerSessionRuntimeReconnectsAfterTransportReceiveFailure \
   -only-testing:MimiRemoteTests/ConversationDataFlowTests/testDirectRuntimeKeepsStaleReplayedServerRequestSilentOnIdleThread \
   -only-testing:MimiRemoteTests/ConversationDataFlowTests/testTurnInterruptAcknowledgementPollsUntilAuthoritativeTerminalTurn \
@@ -97,12 +109,25 @@ bash "$ROOT_DIR/scripts/ios-dev.sh" test \
   -only-testing:MimiRemoteTests/ConversationDataFlowTests/testFailedRunningMessageRetryReusesClientMessageID \
   -only-testing:MimiRemoteTests/ConversationDataFlowTests/testRunningSendFailureNoRolloutFoundMarksLocalEchoFailedAndRetainsRetryPayload \
   -only-testing:MimiRemoteTests/ConversationDataFlowTests/testApprovalDecisionSendsThroughCurrentWebSocket \
+  -only-testing:MimiRemoteTests/LockScreenApprovalTests \
+  -only-testing:MimiRemoteTests/LockScreenApprovalRoutingTests \
+  -only-testing:MimiRemoteTests/NotificationRoutingGateTests \
+  -only-testing:MimiRemoteTests/NotificationRouteResolutionTests \
+  -only-testing:MimiRemoteTests/NotificationTitleCacheTests \
+  -only-testing:MimiRemoteTests/NotificationContentRewriterTests \
   -only-testing:MimiRemoteTests/ConversationDataFlowTests/testSessionStoreReplaysDirectAppServerEventStreamFixture \
   -only-testing:MimiRemoteTests/ConversationDataFlowTests/testSessionStoreSendsUserInputAnswersThroughExistingSocket \
   -only-testing:MimiRemoteTests/ConversationDataFlowTests/testRunningTurnLifecycleKeepsEchoAndFinalAssistantStable \
   -only-testing:MimiRemoteTests/ConversationDataFlowTests/testWorkbenchRestorationRouteRejectsSnapshotFromDifferentEndpoint \
   -only-testing:MimiRemoteTests/ConversationDataFlowTests/testColdStartResolvedCandidateCannotCommitAfterUserSelectsAnotherSession \
   -only-testing:MimiRemoteTests/ConversationDataFlowTests/testLateGitStatusFromPreviousHostCannotOverwriteCurrentHostState \
+  -only-testing:MimiRemoteTests/SessionArchiveReconciliationTests \
+  -only-testing:MimiRemoteTests/ConversationDataFlowTests/testManualWorkspaceRefreshRestartsFromFirstCursor \
+  -only-testing:MimiRemoteTests/ConversationDataFlowTests/testManualSessionLibraryRefreshRestartsDirectoryPageFromFirstCursor \
+  -only-testing:MimiRemoteTests/ConversationDataFlowTests/testWorkspacePageDropsLocallyArchivedCacheWhileKeepingProtectedRows \
+  -only-testing:MimiRemoteTests/ConversationDataFlowTests/testManualRestartStopsContinuationAfterCurrentNetworkPage \
+  -only-testing:MimiRemoteTests/ConversationDataFlowTests/testConcurrentManualRestartsShareFirstPageAndLineage \
+  -only-testing:MimiRemoteTests/ConversationDataFlowTests/testRestartedFirstPageRejectsOldLineageEvenWhenCursorMatches \
   -only-testing:MimiRemoteTests/ConversationDataFlowTests/testArchiveFailureRollsBackPinnedStateOrderingAndPreservesProjections \
   -only-testing:MimiRemoteTests/ConversationDataFlowTests/testUnarchiveFailureRollsBackToArchivedVisibility \
   -only-testing:MimiRemoteTests/ConversationDataFlowTests/testArchivePendingSuppressesDuplicateButAllowsDifferentSessionsConcurrently \
@@ -118,6 +143,7 @@ bash "$ROOT_DIR/scripts/ios-dev.sh" test \
   -only-testing:MimiRemoteTests/ConversationProcessGrouperTests \
   -only-testing:MimiRemoteTests/SessionListLifecycleCoordinatorTests \
   -only-testing:MimiRemoteTests/SessionListPresentationTests \
+  -only-testing:MimiRemoteTests/TokenUsageCardSnapshotTests \
   -only-testing:MimiRemoteTests/FileAttachmentModelsTests \
   -only-testing:MimiRemoteTests/ConversationSnapshotTests/testConversationBubbleAlignment \
   -only-testing:MimiRemoteTests/ConversationSnapshotTests/testDefaultDarkConversationPalette \
@@ -134,4 +160,7 @@ bash "$ROOT_DIR/scripts/ios-dev.sh" test \
   -only-testing:MimiRemoteTests/PairingLinkTests \
   -only-testing:MimiRemoteTests/DoctorDiagnosticsTests \
   -only-testing:MimiRemoteTests/ProtocolContractTests \
+  -only-testing:MimiRemoteTests/ManagedConnectionEntitlementStoreTests \
+  -only-testing:MimiRemoteTests/ManagedConnectionEntitlementAPIClientTests \
+  -only-testing:MimiRemoteTests/ManagedConnectionStoreKitClientTests \
   -only-testing:MimiRemoteTests/LocalizationTests

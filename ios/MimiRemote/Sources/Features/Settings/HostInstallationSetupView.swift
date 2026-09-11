@@ -66,14 +66,48 @@ enum HostInstallationPlatform: String, CaseIterable, Identifiable {
 struct HostInstallationSetupView: View {
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var themeStore: ThemeStore
-    @State private var selectedPlatform: HostInstallationPlatform = .mac
+    @StateObject private var transientPreferences: SettingsTransientPreferences
+    /// 首次连接时默认展开：Mac 端还没装，这一步才是真正的起点。
+    private let defaultExpanded: Bool
+
+    init(
+        transientPreferences: SettingsTransientPreferences? = nil,
+        defaultExpanded: Bool = false
+    ) {
+        _transientPreferences = StateObject(
+            wrappedValue: transientPreferences ?? SettingsTransientPreferences()
+        )
+        self.defaultExpanded = defaultExpanded
+    }
+
+    private var isExpanded: Binding<Bool> {
+        Binding(
+            get: { transientPreferences.hostInstallationExpansionOverride ?? defaultExpanded },
+            set: { transientPreferences.hostInstallationExpansionOverride = $0 }
+        )
+    }
 
     var body: some View {
         let tokens = themeStore.tokens(for: colorScheme)
 
-        DisclosureGroup {
+        // Form 会把 DisclosureGroup 的展开内容当作子行再缩进一级（约 20pt），和下方扫码按钮、
+        // 其他入口的起始边对不齐。这里只让 DisclosureGroup 负责标题行、系统展开箭头和旁白的
+        // 展开状态；内容作为同级行跟随同一个展开状态出现，与整个分组共用一条起始边。
+        DisclosureGroup(isExpanded: isExpanded) {
+            EmptyView()
+        } label: {
+            ConnectionRowLabel(title: L10n.text("ui.first_time_installation"), systemImage: "arrow.down.app")
+                .accessibilityIdentifier("settings.hostInstaller.disclosure")
+        }
+        .settingsRow()
+        .listRowBackground(tokens.settingsGroupBackground)
+
+        if isExpanded.wrappedValue {
             VStack(alignment: .leading, spacing: 16) {
-                Picker(L10n.text("ui.computer_platform"), selection: $selectedPlatform) {
+                Picker(
+                    L10n.text("ui.computer_platform"),
+                    selection: $transientPreferences.hostInstallationPlatform
+                ) {
                     ForEach(HostInstallationPlatform.allCases) { platform in
                         Text(platform.title).tag(platform)
                     }
@@ -83,11 +117,11 @@ struct HostInstallationSetupView: View {
                 .accessibilityIdentifier("settings.hostInstaller.platform")
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(selectedPlatform.installTitle)
+                    Text(transientPreferences.hostInstallationPlatform.installTitle)
                         .font(themeStore.uiFont(.body, weight: .semibold))
                         .foregroundStyle(tokens.primaryText)
 
-                    Text(selectedPlatform.installationDetail)
+                    Text(transientPreferences.hostInstallationPlatform.installationDetail)
                         .font(themeStore.uiFont(.footnote))
                         .foregroundStyle(tokens.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -96,14 +130,14 @@ struct HostInstallationSetupView: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("settings.hostInstaller.installationDetail")
 
-                Link(destination: selectedPlatform.releaseURL) {
+                Link(destination: transientPreferences.hostInstallationPlatform.releaseURL) {
                     HStack(spacing: 12) {
                         // 品牌资源保持官方黑白原色，不跟随 App 的主题色染色。
                         Image("GitHubInvertocat")
                             .renderingMode(.original)
                             .resizable()
                             .scaledToFit()
-                            .frame(width: 24, height: 24)
+                            .frame(width: SettingsLayoutMetrics.iconSlot, height: SettingsLayoutMetrics.iconSlot)
                             .accessibilityHidden(true)
 
                         Text(L10n.text("ui.view_releases_on_github"))
@@ -118,7 +152,7 @@ struct HostInstallationSetupView: View {
                             .foregroundStyle(tokens.secondaryText)
                             .accessibilityHidden(true)
                     }
-                    .frame(minHeight: 44)
+                    .settingsRow()
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -126,14 +160,17 @@ struct HostInstallationSetupView: View {
                 .accessibilityHint(L10n.text("ui.github_release_accessibility_hint"))
                 .accessibilityIdentifier("settings.hostInstaller.githubRelease")
 
-                ShareLink(item: selectedPlatform.installerURL) {
+                ShareLink(item: transientPreferences.hostInstallationPlatform.installerURL) {
                     ConnectionActionLabel(
-                        title: selectedPlatform.shareTitle,
+                        title: transientPreferences.hostInstallationPlatform.shareTitle,
                         systemImage: "square.and.arrow.up"
                     )
                 }
                 .buttonStyle(.bordered)
+                // tint 同时决定 bordered 按钮的底色和文字色。只给中性 tint 会让文字
+                // 也变成次级灰，整枚按钮读起来像被禁用；底保持中性，文字单独回到正文色。
                 .tint(tokens.secondaryText)
+                .foregroundStyle(tokens.primaryText)
                 .controlSize(.large)
                 .accessibilityIdentifier("settings.hostInstaller.share")
                 Text(L10n.text("ui.select_code_directory_then_computer_shows_qr"))
@@ -142,11 +179,11 @@ struct HostInstallationSetupView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.vertical, 12)
-        } label: {
-            ConnectionRowLabel(title: L10n.text("ui.first_time_installation"), systemImage: "arrow.down.app")
+            .settingsRow()
+            .listRowBackground(tokens.settingsGroupBackground)
+            // 展开内容是标题行的延续，不用分隔线把两者切开。
+            .listRowSeparator(.hidden, edges: .top)
         }
-        .accessibilityIdentifier("settings.hostInstaller.disclosure")
-        .listRowBackground(tokens.elevatedSurface)
     }
 }
 
@@ -211,68 +248,17 @@ struct ConnectionPrimaryActionsLayout: Layout {
 
 /// 普通连接入口使用固定图标列，让标题与说明共享同一条起始边。
 struct ConnectionRowLabel: View {
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @EnvironmentObject private var themeStore: ThemeStore
-    @ScaledMetric(relativeTo: .body) private var titlePointSize = 17.0
-    @ScaledMetric(relativeTo: .subheadline) private var valuePointSize = 15.0
-
     let title: String
     var value: String? = nil
     let systemImage: String
     var valueTint: Color? = nil
 
     var body: some View {
-        let tokens = themeStore.tokens(for: colorScheme)
-
-        HStack(spacing: 12) {
-            Image(systemName: systemImage)
-                .font(.system(size: SettingsLayoutMetrics.symbolPointSize, weight: .regular))
-                .symbolRenderingMode(.monochrome)
-                .foregroundStyle(tokens.secondaryText)
-                .frame(width: SettingsLayoutMetrics.iconSlot, height: SettingsLayoutMetrics.iconSlot)
-                .accessibilityHidden(true)
-
-            if dynamicTypeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: 4) {
-                    titleText(tokens: tokens)
-                    valueText(tokens: tokens)
-                }
-            } else {
-                titleText(tokens: tokens)
-                if value != nil {
-                    Spacer(minLength: 12)
-                    valueText(tokens: tokens)
-                }
-            }
-        }
-        .frame(
-            maxWidth: .infinity,
-            minHeight: dynamicTypeSize.isAccessibilitySize
-                ? SettingsLayoutMetrics.accessibilityRowHeight
-                : SettingsLayoutMetrics.standardRowHeight,
-            alignment: .leading
+        SettingsValueLabel(
+            title: title,
+            value: value,
+            systemImage: systemImage,
+            valueTint: valueTint
         )
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
-    }
-
-    private func titleText(tokens: ThemeTokens) -> some View {
-        Text(title)
-            .font(themeStore.uiFont(size: titlePointSize))
-            .foregroundStyle(tokens.primaryText)
-            .fixedSize(horizontal: false, vertical: true)
-            .layoutPriority(1)
-    }
-
-    @ViewBuilder
-    private func valueText(tokens: ThemeTokens) -> some View {
-        if let value {
-            Text(value)
-                .font(themeStore.uiFont(size: valuePointSize))
-                .foregroundStyle(valueTint ?? tokens.secondaryText)
-                .multilineTextAlignment(dynamicTypeSize.isAccessibilitySize ? .leading : .trailing)
-                .fixedSize(horizontal: false, vertical: true)
-        }
     }
 }

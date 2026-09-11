@@ -128,6 +128,16 @@ path_exists() {
   [[ -e "$1" || -L "$1" ]]
 }
 
+manage_linux_tray() {
+  local tray_mode="$1"
+  local tray_helper="$ROOT_DIR/scripts/install-linux-tray.sh"
+  if [[ "$tray_mode" == rollback || "$tray_mode" == uninstall ]]; then
+    tray_helper="$HOME/.local/share/mimi-remote/install-linux-tray.sh"
+  fi
+  [[ -f "$tray_helper" ]] || return 0
+  bash "$tray_helper" "$tray_mode"
+}
+
 uninstall_linux() {
   local destination_binary="$1"
   local previous_binary="$2"
@@ -151,6 +161,7 @@ uninstall_linux() {
   done
 
   if [[ "$has_installed_file" == "0" ]]; then
+    manage_linux_tray uninstall
     echo "Mimi Remote Linux 已处于未安装状态。"
   else
     if path_exists "$destination_service"; then
@@ -165,6 +176,8 @@ uninstall_linux() {
         return 1
       fi
     fi
+
+    manage_linux_tray uninstall
 
     # 先用 daemon-reload 作为 systemd manager 的破坏性操作前置检查；
     # 删除 unit 后再 reload 一次，确保 manager 不保留已卸载的 unit 定义。
@@ -296,6 +309,8 @@ main() {
   local was_active="0"
   local created_config="0"
   local app_server_ssh_target="${AGENTD_APP_SERVER_SSH_TARGET:-}"
+  # 只有显式 SSH 远端时才有元素；展开处用 ${arr[@]+"${arr[@]}"}，因为 bash 3.2
+  # 在 set -u 下把空数组当作未绑定变量（Release 的 macOS 校验用的就是 /bin/bash 3.2）。
   local setup_transport_args=()
   if [[ -n "$app_server_ssh_target" ]]; then
     require_command ssh
@@ -353,7 +368,7 @@ main() {
     --scan-root "$HOME" \
     --browse-root "$HOME" \
     --listen 127.0.0.1:8787 \
-    "${setup_transport_args[@]}" \
+    ${setup_transport_args[@]+"${setup_transport_args[@]}"} \
     2>&1)"; then
     echo "Codex App Server 预检诊断：" >&2
     print_bounded_redacted_lines "$preflight_output" 12 "（agentd setup 没有返回诊断）" >&2
@@ -406,7 +421,7 @@ main() {
     "$destination_binary" setup \
       --scan-root "$HOME/code" \
       --browse-root "$HOME" \
-      "${setup_transport_args[@]}" \
+      ${setup_transport_args[@]+"${setup_transport_args[@]}"} \
       >/dev/null
   fi
   "$destination_binary" doctor --fix
@@ -447,6 +462,9 @@ main() {
   trap - ERR
   cleanup
   trap - EXIT
+  if ! manage_linux_tray "$mode"; then
+    echo "警告：agentd 已完成 ${mode}，托盘更新未完成；请运行 Release 包的 scripts/install-linux-tray.sh 重试。" >&2
+  fi
   echo "Mimi Remote Linux ${mode} 完成：agentd ${source_version}。"
   echo "配置：$config_path"
   echo "服务：systemctl --user status $SERVICE_NAME"

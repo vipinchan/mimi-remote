@@ -173,23 +173,68 @@ struct InitialConnectionSettingsSections: View {
     @EnvironmentObject private var tailcatController: TailcatExperimentController
     @ObservedObject var qrScannerPresentation: ConnectionQRCodeScannerPresentation
     @ScaledMetric(relativeTo: .body) private var profileTitlePointSize = 17.0
-    @ScaledMetric(relativeTo: .caption) private var profileDetailPointSize = 13.0
+    @ScaledMetric(relativeTo: .subheadline) private var profileDetailPointSize = 15.0
 
-    @State private var endpoint = ""
-    @State private var token = ""
-    @State private var didLoadInitialConnection = false
-    @State private var pendingManualConnectionIntent: ConnectionQRCodeScanIntent?
-    @State private var isSavingConnection = false
-    @State private var isAddingConnectionProfile = false
-    @State private var profileDisplayName = ""
-    @State private var profileOperationID: String?
-    @State private var pendingRemovalConfirmation: ConnectionCredentialRemovalConfirmation?
-    @State private var isShowingAdvancedManualConnection = false
-    @State private var localError: String?
-    @State private var copyingConnectionProfileID: String?
-    @State private var copiedConnectionProfileID: String?
-    @State private var copyConnectionTask: Task<Void, Never>?
-    @State private var copyFeedbackTask: Task<Void, Never>?
+    @ObservedObject var draft: ConnectionSettingsDraft
+    let transientPreferences: SettingsTransientPreferences
+    var prioritizesConnectionStatus = false
+
+    private var endpoint: String {
+        get { draft.endpoint }
+        nonmutating set { draft.endpoint = newValue }
+    }
+    private var token: String {
+        get { draft.token }
+        nonmutating set { draft.token = newValue }
+    }
+    private var pendingManualConnectionIntent: ConnectionQRCodeScanIntent? {
+        get { draft.pendingManualConnectionIntent }
+        nonmutating set { draft.pendingManualConnectionIntent = newValue }
+    }
+    private var isSavingConnection: Bool {
+        get { draft.isSavingConnection }
+        nonmutating set { draft.isSavingConnection = newValue }
+    }
+    private var isAddingConnectionProfile: Bool {
+        get { draft.isAddingConnectionProfile }
+        nonmutating set { draft.isAddingConnectionProfile = newValue }
+    }
+    private var profileDisplayName: String {
+        get { draft.profileDisplayName }
+        nonmutating set { draft.profileDisplayName = newValue }
+    }
+    private var profileOperationID: String? {
+        get { draft.profileOperationID }
+        nonmutating set { draft.profileOperationID = newValue }
+    }
+    private var pendingRemovalConfirmation: ConnectionCredentialRemovalConfirmation? {
+        get { draft.pendingRemovalConfirmation }
+        nonmutating set { draft.pendingRemovalConfirmation = newValue }
+    }
+    private var isShowingAdvancedManualConnection: Bool {
+        get { draft.isShowingAdvancedManualConnection }
+        nonmutating set { draft.isShowingAdvancedManualConnection = newValue }
+    }
+    private var localError: String? {
+        get { draft.localError }
+        nonmutating set { draft.localError = newValue }
+    }
+    private var copyingConnectionProfileID: String? {
+        get { draft.copyingConnectionProfileID }
+        nonmutating set { draft.copyingConnectionProfileID = newValue }
+    }
+    private var copiedConnectionProfileID: String? {
+        get { draft.copiedConnectionProfileID }
+        nonmutating set { draft.copiedConnectionProfileID = newValue }
+    }
+    private var copyConnectionTask: Task<Void, Never>? {
+        get { draft.copyConnectionTask }
+        nonmutating set { draft.copyConnectionTask = newValue }
+    }
+    private var copyFeedbackTask: Task<Void, Never>? {
+        get { draft.copyFeedbackTask }
+        nonmutating set { draft.copyFeedbackTask = newValue }
+    }
 
     let onRequestProfileRename: (ConnectionProfile) -> Void
 
@@ -197,158 +242,15 @@ struct InitialConnectionSettingsSections: View {
         let tokens = themeStore.tokens(for: colorScheme)
 
         Group {
-            if !appStore.connectionProfiles.isEmpty {
-                Section {
-                    if let current = appStore.connectionProfileSettingsModel.current {
-                        connectionProfileRow(current)
-                    }
-                    ForEach(appStore.connectionProfileSettingsModel.others) { item in
-                        connectionProfileRow(item)
-                    }
-                } header: {
-                    Text(L10n.text("ui.saved_mac"))
-                } footer: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(L10n.text("ui.only_one_mac_is_connected_at_a_time"))
-                        Text(L10n.text("ui.connection_info_copy_security_notice"))
-                    }
-                    .padding(.top, 8)
-                }
+            savedProfilesSection(tokens: tokens)
+            if prioritizesConnectionStatus {
+                connectionStatusSection(tokens: tokens)
             }
-
-            // 添加电脑的所有入口属于同一组，扫码是唯一主按钮。
-            connectionPresentationSection {
-#if targetEnvironment(macCatalyst)
-                if appStore.localAgentDetected {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Label(
-                            appStore.isUsingLocalConnection ? L10n.text("ui.directly_connected_through_local_assistant") : L10n.text("ui.assistant_has_been_detected_on_this_mac"),
-                            systemImage: "checkmark.circle.fill"
-                        )
-                        .font(themeStore.uiFont(.body, weight: .semibold))
-                        .foregroundStyle(tokens.success)
-                        if !appStore.isConfigured {
-                            Text(localAgentPairingHint)
-                                .font(themeStore.uiFont(.footnote))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 2)
-                }
-#endif
-                ConnectionPrimaryActionsLayout(layoutDirection: layoutDirection) {
-                    Button(action: beginScanningHost) {
-                        ConnectionActionLabel(
-                            title: L10n.text("ui.scan_qr_code_on_computer"),
-                            systemImage: "qrcode.viewfinder"
-                        )
-                        .frame(maxHeight: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(tokens.primaryAction)
-                    .controlSize(.large)
-                    .accessibilityIdentifier("settings.connection.scanQRCode")
-                    .foregroundStyle(tokens.primaryActionForeground)
-
-                    Button(action: pasteConnectionInfo) {
-                        Image(systemName: "clipboard")
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(tokens.secondaryText)
-                    .controlSize(.regular)
-                    .accessibilityLabel(L10n.text("ui.paste_connection_info"))
-                    .accessibilityHint(L10n.text("ui.paste_connection_info_hint"))
-                    .help(L10n.text("ui.paste_connection_info"))
-                    .accessibilityIdentifier("settings.connection.pasteConnectionInfo")
-                }
-                .disabled(isSavingConnection || qrScannerPresentation.isRequestingCameraAuthorization)
-                // 不覆盖 buttonBorderShape：沿用系统给 bordered 按钮的默认外形，
-                // 和连接测速、手动连接里的按钮保持同一套圆角。
-                // 顶部与左右留白一致；下方普通行自带留白，避免主操作和次级入口过于分离。
-                .padding(.top, SettingsLayoutMetrics.rowHorizontalInset)
-                .padding(.bottom, 8)
-                .listRowSeparator(.hidden)
-
-                HostInstallationSetupView()
-                advancedConnectionOptions(tokens: tokens)
-            } header: {
-                Text(L10n.text("ui.add_mac"))
-            } footer: {
-                Text(connectionSectionFooter)
+            addConnectionSection(tokens: tokens)
+            if !prioritizesConnectionStatus {
+                connectionStatusSection(tokens: tokens)
             }
-
-            if shouldShowConnectionStatus {
-                Section {
-                    HStack(spacing: 8) {
-                        ConnectionRowLabel(
-                            title: L10n.text("ui.connection_status"),
-                            value: appStore.connectionStatus.title,
-                            systemImage: connectionStatusSystemImage,
-                            valueTint: statusColor
-                        )
-                        if isConnectionTesting {
-                            ProgressView()
-                                .controlSize(.small)
-                        }
-                    }
-                    if let message = displayErrorMessage {
-                        Text(message)
-                            .foregroundStyle(.red)
-                            .font(themeStore.uiFont(size: 13))
-                    }
-
-                    if appStore.isConfigured {
-                        NavigationLink {
-                            ConnectionSpeedTestView()
-                        } label: {
-                            ConnectionRowLabel(
-                                title: L10n.text("ui.connection_speed_test"),
-                                value: tailcatController.isEnabled
-                                    ? (appStore.activeConnectionProfile?.connectionRoute.title ?? "Tailcat")
-                                    : (appStore.savedFallbackConnectionRoute?.title ?? "Tailscale"),
-                                systemImage: "gauge.with.dots.needle.67percent"
-                            )
-                        }
-                        .settingsStandardListRow()
-                        .accessibilityIdentifier("settings.connectionSpeedTest")
-                    }
-                } header: {
-                    Text(L10n.text("ui.status"))
-                }
-            }
-
-            Section {
-                NavigationLink {
-                    ManagedConnectionSubscriptionView(qrScannerPresentation: qrScannerPresentation)
-                } label: {
-                    ConnectionRowLabel(
-                        title: L10n.text("ui.managed_subscription_title"),
-                        value: appStore.activeConnectionProfile?.connectionRoute.isManaged == true
-                            ? tailcatController.state.connectionMethodSummary
-                            : L10n.text("ui.managed_connection_recommended_value"),
-                        systemImage: "network"
-                    )
-                }
-                .settingsStandardListRow()
-                .accessibilityIdentifier("settings.connection.managedConnection")
-
-                if appStore.isConfigured && appStore.activeConnectionProfile?.connectionRoute.isManaged != true {
-                    NavigationLink {
-                        TailcatExperimentSettingsView()
-                    } label: {
-                        ConnectionRowLabel(
-                            title: L10n.text("ui.custom_tailcat"),
-                            value: tailcatController.state.connectionMethodSummary,
-                            systemImage: "point.3.connected.trianglepath.dotted"
-                        )
-                    }
-                    .settingsStandardListRow()
-                    .accessibilityIdentifier("settings.connection.tailcat")
-                }
-            } header: {
-                Text(L10n.text("ui.connection_method"))
-            }
+            connectionMethodsSection(tokens: tokens)
 
 #if DEBUG
             Section {
@@ -361,11 +263,20 @@ struct InitialConnectionSettingsSections: View {
             }
 #endif
         }
-        .listRowBackground(tokens.elevatedSurface)
+        .listRowBackground(tokens.settingsGroupBackground)
         .settingsStandardListRow()
         .alignmentGuide(.listRowSeparatorLeading) { _ in SettingsLayoutMetrics.iconSlot + 12 }
         // 连接地址/Token 是高频编辑状态，放在这个小子树里，避免每次删字都重绘整个设置页。
         .onAppear(perform: loadInitialConnectionIfNeeded)
+        .onChange(of: appStore.activeConnectionProfileID) { _, _ in
+            loadInitialConnectionIfNeeded()
+        }
+        .onChange(of: appStore.endpoint) { _, _ in
+            loadInitialConnectionIfNeeded()
+        }
+        .onChange(of: appStore.token) { _, _ in
+            loadInitialConnectionIfNeeded()
+        }
         .onDisappear {
             copyConnectionTask?.cancel()
             copyFeedbackTask?.cancel()
@@ -377,6 +288,193 @@ struct InitialConnectionSettingsSections: View {
         }
     }
 
+    @ViewBuilder
+    private func savedProfilesSection(tokens: ThemeTokens) -> some View {
+        if !appStore.connectionProfiles.isEmpty {
+            Section {
+                if let current = appStore.connectionProfileSettingsModel.current {
+                    connectionProfileRow(current)
+                }
+                ForEach(appStore.connectionProfileSettingsModel.others) { item in
+                    connectionProfileRow(item)
+                }
+            } header: {
+                Text(L10n.text("ui.saved_mac"))
+                    .settingsSectionHeaderStyle()
+            } footer: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(L10n.text("ui.only_one_mac_is_connected_at_a_time"))
+                    Text(L10n.text("ui.connection_info_copy_security_notice"))
+                }
+                .settingsSectionFooterStyle()
+                .padding(.top, 8)
+            }
+        }
+    }
+
+    /// 一台电脑都还没存过：这时安装 Mac 端才是第一步，安装说明排到扫码之上并默认展开。
+    private var isFirstComputerSetup: Bool {
+        appStore.connectionProfiles.isEmpty && !appStore.isConfigured
+    }
+
+    @ViewBuilder
+    private func addConnectionSection(tokens: ThemeTokens) -> some View {
+        // 添加电脑的所有入口属于同一组，扫码是唯一主按钮。
+        // 首次连接时安装说明排在扫码之上并默认展开：Mac 端没装好之前，二维码根本不存在。
+        connectionPresentationSection {
+#if targetEnvironment(macCatalyst)
+            if appStore.localAgentDetected {
+                VStack(alignment: .leading, spacing: 5) {
+                    Label(
+                        appStore.isUsingLocalConnection ? L10n.text("ui.directly_connected_through_local_assistant") : L10n.text("ui.assistant_has_been_detected_on_this_mac"),
+                        systemImage: "checkmark.circle.fill"
+                    )
+                    .font(themeStore.uiFont(.body, weight: .semibold))
+                    .foregroundStyle(tokens.success)
+                    if !appStore.isConfigured {
+                        Text(localAgentPairingHint)
+                            .font(themeStore.uiFont(.footnote))
+                            .foregroundStyle(themeStore.tokens(for: colorScheme).secondaryText)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+#endif
+            if isFirstComputerSetup {
+                HostInstallationSetupView(
+                    transientPreferences: transientPreferences,
+                    defaultExpanded: true
+                )
+            }
+
+            ConnectionPrimaryActionsLayout(layoutDirection: layoutDirection) {
+                Button(action: beginScanningHost) {
+                    ConnectionActionLabel(
+                        title: L10n.text("ui.scan_qr_code_on_computer"),
+                        systemImage: "qrcode.viewfinder"
+                    )
+                    .frame(maxHeight: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(tokens.primaryAction)
+                .controlSize(.large)
+                .accessibilityIdentifier("settings.connection.scanQRCode")
+                .foregroundStyle(tokens.primaryActionForeground)
+
+                Button(action: pasteConnectionInfo) {
+                    Image(systemName: "clipboard")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .tint(tokens.secondaryText)
+                .controlSize(.regular)
+                .accessibilityLabel(L10n.text("ui.paste_connection_info"))
+                .accessibilityHint(L10n.text("ui.paste_connection_info_hint"))
+                .help(L10n.text("ui.paste_connection_info"))
+                .accessibilityIdentifier("settings.connection.pasteConnectionInfo")
+            }
+            .disabled(isSavingConnection || qrScannerPresentation.isRequestingCameraAuthorization)
+            // 不覆盖 buttonBorderShape：沿用系统给 bordered 按钮的默认外形，
+            // 和连接测速、手动连接里的按钮保持同一套圆角。
+            // 顶部与左右留白一致；下方普通行自带留白，避免主操作和次级入口过于分离。
+            // 首次连接时上面已经是安装说明行，行间距由分隔线承担，不再额外撑开。
+            .padding(.top, isFirstComputerSetup ? 8 : SettingsLayoutMetrics.rowHorizontalInset)
+            .padding(.bottom, 8)
+            .listRowSeparator(.hidden)
+
+            // 已经存过电脑时对方软件早就装好了，扫码才是主操作，安装说明留在次级位置。
+            if !isFirstComputerSetup {
+                HostInstallationSetupView(transientPreferences: transientPreferences)
+            }
+            advancedConnectionOptions(tokens: tokens)
+        } header: {
+            Text(L10n.text("ui.add_mac"))
+                .settingsSectionHeaderStyle()
+        } footer: {
+            Text(connectionSectionFooter)
+                .settingsSectionFooterStyle()
+        }
+    }
+
+    @ViewBuilder
+    private func connectionStatusSection(tokens: ThemeTokens) -> some View {
+        if shouldShowConnectionStatus {
+            Section {
+                HStack(spacing: 8) {
+                    ConnectionRowLabel(
+                        title: L10n.text("ui.connection_status"),
+                        value: appStore.connectionStatus.title,
+                        systemImage: connectionStatusSystemImage,
+                        valueTint: statusColor
+                    )
+                    if isConnectionTesting {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+                if let message = displayErrorMessage {
+                    Text(message)
+                        .foregroundStyle(tokens.warning)
+                        .font(themeStore.uiFont(size: 13))
+                        .accessibilityIdentifier("settings.connection.error")
+                }
+
+                if appStore.isConfigured {
+                    NavigationLink(value: SettingsDestination.speedTest) {
+                        ConnectionRowLabel(
+                            title: L10n.text("ui.connection_speed_test"),
+                            value: tailcatController.isEnabled
+                                ? (appStore.activeConnectionProfile?.connectionRoute.title ?? "Tailcat")
+                                : (appStore.savedFallbackConnectionRoute?.title ?? "Tailscale"),
+                            systemImage: "gauge.with.dots.needle.67percent"
+                        )
+                    }
+                    .settingsStandardListRow()
+                    .accessibilityIdentifier("settings.connectionSpeedTest")
+                }
+            } header: {
+                Text(L10n.text("ui.status"))
+                    .settingsSectionHeaderStyle()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func connectionMethodsSection(tokens: ThemeTokens) -> some View {
+        if ManagedConnectionSubscriptionView.isEntryVisible || appStore.isConfigured {
+            Section {
+                if ManagedConnectionSubscriptionView.isEntryVisible {
+                    NavigationLink(value: SettingsDestination.managedConnection) {
+                        ConnectionRowLabel(
+                            title: L10n.text("ui.managed_subscription_title"),
+                            value: appStore.activeConnectionProfile?.connectionRoute.isManaged == true
+                                ? tailcatController.state.connectionMethodSummary
+                                : L10n.text("ui.managed_connection_recommended_value"),
+                            systemImage: "network"
+                        )
+                    }
+                    .settingsStandardListRow()
+                    .accessibilityIdentifier("settings.connection.managedConnection")
+                }
+
+                if appStore.isConfigured && appStore.activeConnectionProfile?.connectionRoute.isManaged != true {
+                    NavigationLink(value: SettingsDestination.tailcat) {
+                        ConnectionRowLabel(
+                            title: L10n.text("ui.custom_tailcat"),
+                            value: tailcatController.state.connectionMethodSummary,
+                            systemImage: "point.3.connected.trianglepath.dotted"
+                        )
+                    }
+                    .settingsStandardListRow()
+                    .accessibilityIdentifier("settings.connection.tailcat")
+                }
+            } header: {
+                Text(L10n.text("ui.connection_method"))
+                    .settingsSectionHeaderStyle()
+            }
+        }
+    }
+
     /// 首次连接与已有连接都复用这一组高级恢复入口。
     /// 默认折叠能保留完整能力，同时不让低频技术信息和扫码主路径竞争注意力。
     @ViewBuilder
@@ -385,19 +483,19 @@ struct InitialConnectionSettingsSections: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(L10n.text("ui.first_time_installation"))
                     .font(themeStore.uiFont(.caption, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(themeStore.tokens(for: colorScheme).secondaryText)
                 Text("brew install gaixianggeng/tap/mimi-remote")
                     .font(.system(.callout, design: .monospaced))
                     .textSelection(.enabled)
                 Text(L10n.text("ui.start_the_assistant_and_display_the_qr_code"))
                     .font(themeStore.uiFont(.caption, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(themeStore.tokens(for: colorScheme).secondaryText)
                 Text("agentd up")
                     .font(.system(.callout, design: .monospaced))
                     .textSelection(.enabled)
                 Text(L10n.text("ui.run_agentd_pair_when_the_qr_code_expires"))
                     .font(themeStore.uiFont(.footnote))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(themeStore.tokens(for: colorScheme).secondaryText)
             }
             .padding(.vertical, 6)
         } label: {
@@ -411,17 +509,17 @@ struct InitialConnectionSettingsSections: View {
             VStack(alignment: .leading, spacing: 12) {
                 if isAddingConnectionProfile {
                     connectionFieldLabel(L10n.text("ui.display_name")) {
-                        TextField(L10n.text("ui.example_studio_mac"), text: $profileDisplayName)
+                        TextField(L10n.text("ui.example_studio_mac"), text: $draft.profileDisplayName)
                             .textInputAutocapitalization(.words)
                             .accessibilityIdentifier("settings.profileDisplayName")
                     }
                 }
                 connectionFieldLabel(L10n.text("ui.connection_address")) {
-                    StableEndpointTextField(placeholder: endpointPlaceholder, text: $endpoint)
+                    StableEndpointTextField(placeholder: endpointPlaceholder, text: $draft.endpoint)
                         .frame(minHeight: 28)
                 }
                 connectionFieldLabel(L10n.text("ui.access_code")) {
-                    SecureField(L10n.text("ui.enter_access_code"), text: $token)
+                    SecureField(L10n.text("ui.enter_access_code"), text: $draft.token)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 }
@@ -446,6 +544,7 @@ struct InitialConnectionSettingsSections: View {
         } label: {
             ConnectionRowLabel(title: manualConnectionTitle, systemImage: "keyboard")
         }
+        .accessibilityIdentifier("settings.connection.manual")
     }
 
     /// 业务回调和弹窗只挂到每条连接流程中的一个原生 Section，
@@ -655,6 +754,7 @@ struct InitialConnectionSettingsSections: View {
                     .font(themeStore.uiFont(size: profileDetailPointSize))
                     .foregroundStyle(tokens.secondaryText)
                     .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                    .truncationMode(.middle)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -753,9 +853,14 @@ struct InitialConnectionSettingsSections: View {
         if let dnsName = item.profile.tailscaleDNSName {
             details.append("MagicDNS \(dnsName)")
         }
-        let fallbackHost = URLComponents(string: item.profile.endpoint)?.host ?? item.profile.endpoint
-        details.append("IP \(fallbackHost)")
-        if item.isCurrent {
+        let components = URLComponents(string: item.profile.endpoint)
+        let fallbackHost = components?.host ?? item.profile.endpoint
+        // 去掉重复的当前地址后，摘要仍需保留端口，便于区分同一主机上的不同服务。
+        let fallbackAddress = components?.port.map { "\(fallbackHost):\($0)" } ?? fallbackHost
+        details.append("IP \(fallbackAddress)")
+        if item.isCurrent,
+           AgentAPIClient.normalizedEndpoint(appStore.connectionEndpoint)
+               != AgentAPIClient.normalizedEndpoint(item.profile.preferredEndpoint) {
             details.append("\(L10n.text("ui.current_connection")) \(appStore.connectionEndpoint)")
         }
         return details.joined(separator: " · ")
@@ -800,7 +905,7 @@ struct InitialConnectionSettingsSections: View {
                 Text(connectionStabilityDetailText(stability))
                     .font(themeStore.uiFont(.footnote))
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(themeStore.tokens(for: colorScheme).secondaryText)
                     .lineLimit(1)
             }
         }
@@ -826,19 +931,20 @@ struct InitialConnectionSettingsSections: View {
     }
 
     private func connectionStageRow(_ stage: ConnectionTestStageTiming) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+        let tokens = themeStore.tokens(for: colorScheme)
+        return HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 5) {
                     Text(stage.kind.title)
                     if case .failed = stage.status {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(themeStore.uiFont(.caption2, weight: .semibold))
-                            .foregroundStyle(.red)
+                            .foregroundStyle(tokens.warning)
                     }
                 }
                 Text(stage.kind.detail)
                     .font(themeStore.uiFont(.footnote))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(themeStore.tokens(for: colorScheme).secondaryText)
                     .lineLimit(1)
             }
             Spacer(minLength: 12)
@@ -865,7 +971,7 @@ struct InitialConnectionSettingsSections: View {
         case .succeeded:
             return .secondary
         case .failed:
-            return .red
+            return themeStore.tokens(for: colorScheme).warning
         }
     }
 
@@ -935,7 +1041,7 @@ struct InitialConnectionSettingsSections: View {
         if let hint = diagnostics.hints.first {
             Text(hint)
                 .font(themeStore.uiFont(.footnote))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(themeStore.tokens(for: colorScheme).secondaryText)
         }
     }
 
@@ -950,7 +1056,7 @@ struct InitialConnectionSettingsSections: View {
                     .lineLimit(1)
                 Text(summary.detail)
                     .font(themeStore.uiFont(.footnote))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(themeStore.tokens(for: colorScheme).secondaryText)
                     .lineLimit(2)
                     .multilineTextAlignment(.trailing)
             }
@@ -963,7 +1069,7 @@ struct InitialConnectionSettingsSections: View {
                 Text(title)
                 Text(detail)
                     .font(themeStore.uiFont(.footnote))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(themeStore.tokens(for: colorScheme).secondaryText)
                     .lineLimit(2)
             }
             Spacer(minLength: 12)
@@ -983,7 +1089,7 @@ struct InitialConnectionSettingsSections: View {
             Spacer(minLength: 12)
             Text(error)
                 .font(themeStore.uiFont(.footnote))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(themeStore.tokens(for: colorScheme).secondaryText)
                 .multilineTextAlignment(.trailing)
                 .lineLimit(2)
         }
@@ -991,7 +1097,7 @@ struct InitialConnectionSettingsSections: View {
 
     private func gatewayMetricColor(milliseconds: Int) -> Color {
         if milliseconds >= 2_000 {
-            return .red
+            return themeStore.tokens(for: colorScheme).warning
         }
         if milliseconds >= 500 {
             return themeStore.tokens(for: colorScheme).warning
@@ -1058,7 +1164,7 @@ struct InitialConnectionSettingsSections: View {
         case .connected:
             return themeStore.tokens(for: colorScheme).success
         case .failed:
-            return .red
+            return themeStore.tokens(for: colorScheme).warning
         case .testing:
             return themeStore.tokens(for: colorScheme).warning
         case .idle:
@@ -1123,12 +1229,11 @@ struct InitialConnectionSettingsSections: View {
     }
 
     private func loadInitialConnectionIfNeeded() {
-        guard !didLoadInitialConnection else {
-            return
-        }
-        didLoadInitialConnection = true
-        endpoint = appStore.endpoint
-        token = appStore.token
+        draft.reloadIfConnectionChanged(
+            profileID: appStore.activeConnectionProfileID,
+            endpoint: appStore.endpoint,
+            token: appStore.token
+        )
     }
 
     private func prepareAddingConnectionProfile() {
