@@ -120,7 +120,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish personal prerelease
-        if: contains(github.event.head_commit.message, '[beta]')
+        if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[beta]')
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
